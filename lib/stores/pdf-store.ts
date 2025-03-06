@@ -92,21 +92,76 @@ export const usePDFStore = create<PDFStore>((set, get) => ({
       console.log('File ID:', fileId);
       console.log('OpenAI File ID:', file?.openaiFileId);
       
-      const requestParams = {
-        messages: [{ 
-          role: 'user', 
-          content: prompt 
-        }],
-        model: 'gpt-4o'
-        // Note: file_ids is not supported in the standard chat completions API
-        // To use files with OpenAI, we need to use the Assistants API instead
-      };
-      
-      console.log('Request params:', JSON.stringify(requestParams));
-      
-      const completion = await openai.chat.completions.create(requestParams);
+      // If we have a file, use the Assistants API
+      if (file?.openaiFileId) {
+        console.log('Using Assistants API for file-based query');
+        
+        // Create a thread with the prompt
+        const thread = await openai.beta.threads.create({
+          messages: [
+            {
+              role: 'user',
+              content: prompt,
+            },
+          ],
+        });
 
-      return completion.choices[0].message.content || '';
+        // Create an assistant with file search capability
+        const assistant = await openai.beta.assistants.create({
+          name: 'PDF Analysis Assistant',
+          instructions: 'You are a helpful assistant that answers questions based on the provided PDF documents.',
+          model: 'gpt-4o',
+          tools: [{ type: 'retrieval' }],
+          file_ids: [file.openaiFileId]
+        });
+
+        // Create and wait for the run to complete
+        const run = await openai.beta.threads.runs.create(
+          thread.id,
+          { assistant_id: assistant.id }
+        );
+
+        // Poll for completion
+        let runStatus = await openai.beta.threads.runs.retrieve(
+          thread.id,
+          run.id
+        );
+
+        while (runStatus.status === 'queued' || runStatus.status === 'in_progress') {
+          await new Promise(resolve => setTimeout(resolve, 1000));
+          runStatus = await openai.beta.threads.runs.retrieve(
+            thread.id,
+            run.id
+          );
+        }
+
+        if (runStatus.status === 'completed') {
+          // Get the assistant's response
+          const messages = await openai.beta.threads.messages.list(thread.id);
+          const lastMessage = messages.data[0];
+
+          return lastMessage.content[0].text.value;
+        } else {
+          throw new Error(`Run failed with status: ${runStatus.status}`);
+        }
+      } else {
+        // For regular queries without files, use the standard chat completions API
+        const requestParams = {
+          messages: [{ 
+            role: 'user', 
+            content: prompt 
+          }],
+          model: 'gpt-4o'
+          // Note: file_ids is not supported in the standard chat completions API
+          // To use files with OpenAI, we need to use the Assistants API instead
+        };
+        
+        console.log('Using standard chat completions API');
+        console.log('Request params:', JSON.stringify(requestParams));
+        
+        const completion = await openai.chat.completions.create(requestParams);
+        return completion.choices[0].message.content || '';
+      }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Failed to generate response';
       throw new Error(errorMessage);
