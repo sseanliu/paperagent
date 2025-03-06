@@ -24,8 +24,15 @@ export function APIKeyDialog() {
   }, [openAIKey, isOpen]);
 
   const handleSave = () => {
+    console.log('Saving API key, length:', apiKey.length);
     setOpenAIKey(apiKey);
     setIsOpen(false);
+    
+    // Verify the key was saved
+    setTimeout(() => {
+      const savedKey = useSettingsStore.getState().openAIKey;
+      console.log('Saved API key exists:', !!savedKey, 'Length:', savedKey?.length);
+    }, 100);
   };
 
   return (

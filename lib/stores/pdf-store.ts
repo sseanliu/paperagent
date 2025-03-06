@@ -28,6 +28,8 @@ function createOpenAIClient() {
     throw new Error('OpenAI API key is required');
   }
   
+  console.log('API Key exists:', !!apiKey, 'Length:', apiKey.length);
+  
   return new OpenAI({
     apiKey,
     dangerouslyAllowBrowser: true,
@@ -86,16 +88,24 @@ export const usePDFStore = create<PDFStore>((set, get) => ({
       const openai = createOpenAIClient();
       const file = fileId ? get().uploadedFiles.find(f => f.id === fileId) : null;
       
-      const completion = await openai.chat.completions.create({
+      console.log('Generating response with prompt:', prompt);
+      console.log('File ID:', fileId);
+      console.log('OpenAI File ID:', file?.openaiFileId);
+      
+      const requestParams = {
         messages: [{ 
           role: 'user', 
           content: prompt 
         }],
-        model: 'gpt-4',
+        model: 'gpt-4o',
         ...(file?.openaiFileId && {
           file_ids: [file.openaiFileId]
         })
-      });
+      };
+      
+      console.log('Request params:', JSON.stringify(requestParams));
+      
+      const completion = await openai.chat.completions.create(requestParams);
 
       return completion.choices[0].message.content || '';
     } catch (error) {
