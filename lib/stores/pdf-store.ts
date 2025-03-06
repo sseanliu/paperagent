@@ -185,28 +185,38 @@ export const usePDFStore = create<PDFStore>((set, get) => ({
           const messages = await openai.beta.threads.messages.list(thread.id);
           console.log('Messages received, count:', messages.data.length);
           
-          if (messages.data.length === 0) {
-            console.error('No messages found in thread');
+          if (!messages || !messages.data || messages.data.length === 0) {
+            console.error('No messages found in thread or invalid response format');
             return 'Sorry, I could not generate a response for this document.';
           }
           
           const lastMessage = messages.data[0];
-          console.log('Last message type:', lastMessage.role);
+          console.log('Last message role:', lastMessage?.role || 'undefined');
 
-          // Add null check to prevent undefined errors
-          if (lastMessage && lastMessage.content && lastMessage.content.length > 0) {
-            const content = lastMessage.content[0];
-            console.log('Content type:', content.type);
-            
-            if (content.type === 'text' && content.text) {
-              return content.text.value || '';
-            } else {
-              console.error('Unexpected content type:', content.type);
-              return 'Sorry, I could not generate a response in the expected format.';
-            }
-          } else {
-            console.error('Unexpected response format from Assistants API:', lastMessage);
+          // Add comprehensive null checks to prevent undefined errors
+          if (!lastMessage) {
+            console.error('Last message is undefined');
             return 'Sorry, I could not generate a response for this document.';
+          }
+          
+          if (!lastMessage.content || !Array.isArray(lastMessage.content) || lastMessage.content.length === 0) {
+            console.error('Message content is invalid:', lastMessage.content);
+            return 'Sorry, I could not generate a response for this document.';
+          }
+          
+          const content = lastMessage.content[0];
+          console.log('Content type:', content?.type || 'undefined');
+          
+          if (!content) {
+            console.error('Content is undefined');
+            return 'Sorry, I could not generate a response for this document.';
+          }
+          
+          if (content.type === 'text' && content.text && typeof content.text.value === 'string') {
+            return content.text.value;
+          } else {
+            console.error('Unexpected content format:', content);
+            return 'Sorry, I could not generate a response in the expected format.';
           }
         } else {
           console.error('Run failed with status:', runStatus.status);
@@ -229,10 +239,10 @@ export const usePDFStore = create<PDFStore>((set, get) => ({
 // Helper function for standard queries
 async function handleStandardQuery(prompt: string) {
   try {
-    console.log('Using standard chat completions API');
     const apiKey = config.openai.apiKey;
     
     if (!apiKey) {
+      console.error('OpenAI API key is missing');
       throw new Error('OpenAI API key is required');
     }
     
@@ -256,18 +266,51 @@ async function handleStandardQuery(prompt: string) {
     });
     
     if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Failed to get error details');
+      console.error(`API request failed with status ${response.status}: ${errorText}`);
       throw new Error(`API request failed with status ${response.status}`);
     }
     
-    const data = await response.json();
-    console.log('API response received');
-    
-    if (data && data.choices && data.choices.length > 0 && data.choices[0].message) {
-      return data.choices[0].message.content || '';
-    } else {
-      console.error('Unexpected response format:', data);
-      return 'Sorry, I could not generate a response.';
+    // Parse response with error handling
+    let data;
+    try {
+      data = await response.json();
+      console.log('API response received');
+    } catch (parseError) {
+      console.error('Failed to parse API response:', parseError);
+      return 'Sorry, I could not generate a response due to an API response parsing error.';
     }
+    
+    // Add comprehensive null checks
+    if (!data) {
+      console.error('API response data is null or undefined');
+      return 'Sorry, I could not generate a response due to an empty API response.';
+    }
+    
+    if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
+      console.error('API response has no choices:', data);
+      return 'Sorry, I could not generate a response due to an invalid API response format.';
+    }
+    
+    const firstChoice = data.choices[0];
+    if (!firstChoice) {
+      console.error('First choice is undefined');
+      return 'Sorry, I could not generate a response due to an invalid API response format.';
+    }
+    
+    if (!firstChoice.message) {
+      console.error('Message in first choice is undefined:', firstChoice);
+      return 'Sorry, I could not generate a response due to an invalid API response format.';
+    }
+    
+    // Safely access content with null check
+    const content = firstChoice.message.content;
+    if (typeof content !== 'string') {
+      console.error('Content is not a string:', content);
+      return 'Sorry, I could not generate a response due to an invalid API response format.';
+    }
+    
+    return content;
   } catch (error) {
     console.error('Standard query error:', error);
     return 'Sorry, I could not generate a response due to an API error.';
@@ -280,6 +323,7 @@ async function handleFallbackQuery(prompt: string) {
     const apiKey = config.openai.apiKey;
     
     if (!apiKey) {
+      console.error('OpenAI API key is missing');
       throw new Error('OpenAI API key is required');
     }
     
@@ -303,18 +347,51 @@ async function handleFallbackQuery(prompt: string) {
     });
     
     if (!response.ok) {
+      const errorText = await response.text().catch(() => 'Failed to get error details');
+      console.error(`API request failed with status ${response.status}: ${errorText}`);
       throw new Error(`API request failed with status ${response.status}`);
     }
     
-    const data = await response.json();
-    console.log('Fallback response received');
-    
-    if (data && data.choices && data.choices.length > 0 && data.choices[0].message) {
-      return data.choices[0].message.content || '';
-    } else {
-      console.error('Unexpected response format:', data);
-      return 'Sorry, I could not generate a response.';
+    // Parse response with error handling
+    let data;
+    try {
+      data = await response.json();
+      console.log('Fallback response received');
+    } catch (parseError) {
+      console.error('Failed to parse API response:', parseError);
+      return 'Sorry, I could not generate a response due to an API response parsing error.';
     }
+    
+    // Add comprehensive null checks
+    if (!data) {
+      console.error('API response data is null or undefined');
+      return 'Sorry, I could not generate a response due to an empty API response.';
+    }
+    
+    if (!data.choices || !Array.isArray(data.choices) || data.choices.length === 0) {
+      console.error('API response has no choices:', data);
+      return 'Sorry, I could not generate a response due to an invalid API response format.';
+    }
+    
+    const firstChoice = data.choices[0];
+    if (!firstChoice) {
+      console.error('First choice is undefined');
+      return 'Sorry, I could not generate a response due to an invalid API response format.';
+    }
+    
+    if (!firstChoice.message) {
+      console.error('Message in first choice is undefined:', firstChoice);
+      return 'Sorry, I could not generate a response due to an invalid API response format.';
+    }
+    
+    // Safely access content with null check
+    const content = firstChoice.message.content;
+    if (typeof content !== 'string') {
+      console.error('Content is not a string:', content);
+      return 'Sorry, I could not generate a response due to an invalid API response format.';
+    }
+    
+    return content;
   } catch (error) {
     console.error('Fallback query error:', error);
     return 'Sorry, I could not generate a response due to an API error.';
