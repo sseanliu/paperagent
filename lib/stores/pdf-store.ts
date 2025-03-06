@@ -121,23 +121,28 @@ export const usePDFStore = create<PDFStore>((set, get) => ({
         });
         console.log('Thread created:', thread.id);
 
-        // Create an assistant with retrieval capability
+        // Create an assistant with file_search capability
         console.log('Creating assistant with file:', file.openaiFileId);
         const assistant = await openai.beta.assistants.create({
           name: 'PDF Analysis Assistant',
           instructions: 'You are a helpful assistant that answers questions based on the provided PDF documents.',
           model: 'gpt-4o',
-          tools: [{ type: 'retrieval' }]
+          tools: [{ type: 'file_search' }]
         });
         console.log('Assistant created:', assistant.id);
         
         // Attach the file to the assistant after creation
         console.log('Attaching file to assistant...');
-        await openai.beta.assistants.files.create(
-          assistant.id,
-          { file_id: file.openaiFileId }
-        );
-        console.log('File attached to assistant');
+        try {
+          await openai.beta.assistants.files.create(
+            assistant.id,
+            { file_id: file.openaiFileId }
+          );
+          console.log('File attached to assistant');
+        } catch (fileAttachError) {
+          console.error('Error attaching file to assistant:', fileAttachError);
+          throw new Error('Failed to attach file to assistant');
+        }
 
         // Create and wait for the run to complete
         console.log('Creating run with thread:', thread.id, 'and assistant:', assistant.id);
@@ -154,14 +159,24 @@ export const usePDFStore = create<PDFStore>((set, get) => ({
         );
         console.log('Initial run status:', runStatus.status);
 
-        while (runStatus.status === 'queued' || runStatus.status === 'in_progress') {
+        let maxAttempts = 60; // 1 minute timeout (1 second per attempt)
+        let attempts = 0;
+
+        while ((runStatus.status === 'queued' || runStatus.status === 'in_progress') && attempts < maxAttempts) {
           console.log('Run status:', runStatus.status, '- waiting...');
           await new Promise(resolve => setTimeout(resolve, 1000));
           runStatus = await openai.beta.threads.runs.retrieve(
             thread.id,
             run.id
           );
+          attempts++;
         }
+        
+        if (attempts >= maxAttempts) {
+          console.error('Run timed out after 60 seconds');
+          throw new Error('Assistant run timed out');
+        }
+        
         console.log('Final run status:', runStatus.status);
 
         if (runStatus.status === 'completed') {
@@ -176,7 +191,7 @@ export const usePDFStore = create<PDFStore>((set, get) => ({
           }
           
           const lastMessage = messages.data[0];
-          console.log('Last message:', JSON.stringify(lastMessage));
+          console.log('Last message type:', lastMessage.role);
 
           // Add null check to prevent undefined errors
           if (lastMessage && lastMessage.content && lastMessage.content.length > 0) {
@@ -200,61 +215,108 @@ export const usePDFStore = create<PDFStore>((set, get) => ({
       } catch (assistantError) {
         console.error('Error using Assistants API:', assistantError);
         
-        // Fall back to standard chat completions if Assistants API fails
+        // Fall back to standard chat completions API
         console.log('Falling back to standard chat completions API');
-        try {
-          const requestParams = {
-            messages: [{ 
-              role: 'user', 
-              content: `The following question is about a PDF document: ${prompt}` 
-            }],
-            model: 'gpt-3.5-turbo'
-          };
-          
-          console.log('Fallback request params:', JSON.stringify(requestParams));
-          const completion = await openai.chat.completions.create(requestParams);
-          
-          // Add null check to prevent TypeError
-          if (completion && completion.choices && completion.choices[0] && completion.choices[0].message) {
-            return completion.choices[0].message.content || '';
-          } else {
-            console.error('Unexpected completion format:', completion);
-            return 'Sorry, I could not generate a response.';
-          }
-        } catch (fallbackError) {
-          console.error('Fallback also failed:', fallbackError);
-          return 'Sorry, I could not generate a response due to an API error.';
-        }
+        return handleFallbackQuery(prompt);
       }
     } else {
       // For regular queries without files, use the standard chat completions API
-      const requestParams = {
-        messages: [{ 
-          role: 'user', 
-          content: prompt 
-        }],
-        model: 'gpt-4o'
-        // Note: file_ids is not supported in the standard chat completions API
-        // To use files with OpenAI, we need to use the Assistants API instead
-      };
-      
-      console.log('Using standard chat completions API');
-      console.log('Request params:', JSON.stringify(requestParams));
-      
-      try {
-        const completion = await openai.chat.completions.create(requestParams);
-        
-        // Add null check to prevent TypeError
-        if (completion && completion.choices && completion.choices[0] && completion.choices[0].message) {
-          return completion.choices[0].message.content || '';
-        } else {
-          console.error('Unexpected completion format:', completion);
-          return 'Sorry, I could not generate a response.';
-        }
-      } catch (apiError) {
-        console.error('Chat completions API error:', apiError);
-        return 'Sorry, I could not generate a response due to an API error.';
-      }
+      return handleStandardQuery(prompt);
     }
   },
 }));
+
+// Helper function for standard queries
+async function handleStandardQuery(prompt: string) {
+  try {
+    console.log('Using standard chat completions API');
+    const apiKey = config.openai.apiKey;
+    
+    if (!apiKey) {
+      throw new Error('OpenAI API key is required');
+    }
+    
+    const requestParams = {
+      model: 'gpt-3.5-turbo',
+      messages: [{ 
+        role: 'user', 
+        content: prompt 
+      }]
+    };
+    
+    console.log('Request params:', JSON.stringify(requestParams));
+    
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(requestParams)
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API request failed with status ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('API response received');
+    
+    if (data && data.choices && data.choices.length > 0 && data.choices[0].message) {
+      return data.choices[0].message.content || '';
+    } else {
+      console.error('Unexpected response format:', data);
+      return 'Sorry, I could not generate a response.';
+    }
+  } catch (error) {
+    console.error('Standard query error:', error);
+    return 'Sorry, I could not generate a response due to an API error.';
+  }
+}
+
+// Helper function for fallback queries
+async function handleFallbackQuery(prompt: string) {
+  try {
+    const apiKey = config.openai.apiKey;
+    
+    if (!apiKey) {
+      throw new Error('OpenAI API key is required');
+    }
+    
+    const requestParams = {
+      model: 'gpt-3.5-turbo',
+      messages: [{ 
+        role: 'user', 
+        content: `The following question is about a PDF document: ${prompt}` 
+      }]
+    };
+    
+    console.log('Fallback request params:', JSON.stringify(requestParams));
+    
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`
+      },
+      body: JSON.stringify(requestParams)
+    });
+    
+    if (!response.ok) {
+      throw new Error(`API request failed with status ${response.status}`);
+    }
+    
+    const data = await response.json();
+    console.log('Fallback response received');
+    
+    if (data && data.choices && data.choices.length > 0 && data.choices[0].message) {
+      return data.choices[0].message.content || '';
+    } else {
+      console.error('Unexpected response format:', data);
+      return 'Sorry, I could not generate a response.';
+    }
+  } catch (error) {
+    console.error('Fallback query error:', error);
+    return 'Sorry, I could not generate a response due to an API error.';
+  }
+}
