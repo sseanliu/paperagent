@@ -97,10 +97,9 @@ export const usePDFStore = create<PDFStore>((set, get) => ({
           role: 'user', 
           content: prompt 
         }],
-        model: 'gpt-4o',
-        ...(file?.openaiFileId && {
-          file_ids: [file.openaiFileId]
-        })
+        model: 'gpt-4o'
+        // Note: file_ids is not supported in the standard chat completions API
+        // To use files with OpenAI, we need to use the Assistants API instead
       };
       
       console.log('Request params:', JSON.stringify(requestParams));
